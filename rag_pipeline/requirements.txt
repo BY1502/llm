@@ -1,0 +1,39 @@
+# === FastAPI & 서버 관련 ===
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+
+# === LangChain Core ===
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-huggingface
+langchain-chroma
+langchain-ollama
+
+# === Vector DB & 검색 ===
+chromadb
+rank-bm25
+
+# === 문서 처리 ===
+pypdf
+pandas
+openpyxl
+unstructured
+pypdf
+
+# === 임베딩 / 재랭킹 모델 ===
+sentence-transformers
+torch
+transformers
+
+# === 기타 유틸 ===
+numpy
+scikit-learn
+tqdm
+
+# === 개발 및 디버깅 (선택) ===
+python-dotenv
+rich

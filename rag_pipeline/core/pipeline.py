@@ -3,6 +3,7 @@ from rag_pipeline.retrieval.hybrid import hybrid_retrieve
 from rag_pipeline.retrieval.rerankers import CrossEncoderReranker
 from rag_pipeline.indexing.sparse import build_sparse_retriever
 from rag_pipeline.llm.json_answer import answer_with_json_autoschema
+from rag_pipeline.llm.extract_filters import extract_filters
 from rag_pipeline.core.global_index import get_global_index
 from rag_pipeline.core.workspace import WORKSPACES
 from rag_pipeline.core.processing import VS_CACHE, BM25_CACHE, DOCS_CACHE
@@ -35,55 +36,6 @@ CASE_QUERY_STOPWORDS = [
     "에 대한", "에대한", "에 관해", "에관해",
     "을", "를", "이", "가", "은", "는"
 ]
-
-def _answer_to_text(answer: Any) -> str:
-    """
-    JSON Auto-Schema의 answer 객체를 사람이 읽을 수 있는 텍스트로 풀어주는 유틸.
-    구조가 매번 달라도 최대한 예쁘게 펼쳐서 한글 요약처럼 보여주기 위함.
-    """
-    if answer is None:
-        return ""
-
-    # 1) 사고 예시처럼 단순 dict 인 경우
-    if isinstance(answer, dict):
-        lines = []
-        for k, v in answer.items():
-            # 기본 타입은 "키: 값" 형태로
-            if isinstance(v, (str, int, float, bool)):
-                lines.append(f"{k}: {v}")
-            # 리스트인 경우 (예: cases 리스트 등)
-            elif isinstance(v, list):
-                # 리스트 안에 dict들이 들어있는 경우 첫 번째만 간단 요약
-                if v and isinstance(v[0], dict):
-                    lines.append(f"{k}:")
-                    first = v[0]
-                    for kk, vv in first.items():
-                        if isinstance(vv, (str, int, float, bool)):
-                            lines.append(f"  - {kk}: {vv}")
-                else:
-                    # 단순 문자열 리스트 등
-                    joined = ", ".join(map(str, v))
-                    lines.append(f"{k}: {joined}")
-            else:
-                # 그 밖의 타입들은 문자열로 그냥 던짐
-                lines.append(f"{k}: {str(v)}")
-        return "\n".join(lines)
-
-    # 2) 리스트 전체가 answer인 경우
-    if isinstance(answer, list):
-        parts = []
-        for idx, item in enumerate(answer, start=1):
-            if isinstance(item, dict):
-                parts.append(f"[{idx}번 항목]")
-                for k, v in item.items():
-                    parts.append(f"- {k}: {v}")
-            else:
-                parts.append(f"- {item}")
-        return "\n".join(parts)
-
-    # 3) 그 외는 그냥 문자열로 캐스팅
-    return str(answer)
-
 
 def extract_query_keywords(query: str | None) -> list[str]:
     """
@@ -206,6 +158,18 @@ def run_pipeline(req):
         if ws_id:
             BM25_CACHE[ws_id] = bm25
         print(f"[DEBUG] lazy build bm25, docs={len(docs)}")
+        
+    # -----------------------------------------------------
+    # 3.5) Pre-filtering 조건 추출
+    # -----------------------------------------------------
+    
+    search_filter = None
+    # 질문이 너무 짧지 않을 때만 필터 추출 시도 (비용/속도 고려)
+    if req.query and len(req.query) > 5:
+        try:
+            search_filter = extract_filters(req.query, model_cfg)
+        except Exception as e:
+            print(f"[FILTER] 필터 추출 중 오류 발생: {e}")
 
     # -----------------------------------------------------
     # 4) retrieval (dense / sparse / hybrid)
@@ -218,6 +182,10 @@ def run_pipeline(req):
     CANDIDATE_K = max(req.final_k * 3, 10)
 
     if mode == "dense":
+        # Dense 모드에도 필터 적용
+        dense_kwargs = {"k": req.k}
+        if search_filter:
+            dense_kwargs["filter"] = search_filter
         matched = vs.as_retriever(search_kwargs={"k": req.k}).invoke(req.query) if vs else []
         used_vs = True
 
@@ -240,6 +208,7 @@ def run_pipeline(req):
                 # k_final=req.final_k,
                 k_final=CANDIDATE_K,
                 reranker=reranker,
+                filter=search_filter, # 추출한 필터 전달
             )
             used_vs = True
             used_bm25 = True
@@ -266,11 +235,12 @@ def run_pipeline(req):
     for d in matched:
         all_tags.extend(_ensure_tags_list(d.metadata.get("tags")))
 
-    unique_tags = sorted(set(all_tags))
-    print(f"[MATCH] matched_docs={len(matched)} | unique_tags={unique_tags}")
+    # 🔥 [주석 처리] 매칭된 데이터 출력 ( 너무 길어서 출력하지 않음 )
+    # unique_tags = sorted(set(all_tags))
+    # print(f"[MATCH] matched_docs={len(matched)} | unique_tags={unique_tags}")
 
-    if matched:
-        print("[DEBUG] first matched metadata:", matched[0].metadata)
+    # if matched:
+    #     print("[DEBUG] first matched metadata:", matched[0].metadata)
 
     # -----------------------------------------------------
     # 6) 요청에서 tags 필터링
@@ -301,7 +271,7 @@ def run_pipeline(req):
     ordered = prioritize_docs_by_keywords(matched, keywords)
 
     print(
-        f"[LLM MODEL] : {llm_choise}"
+        # f"[LLM MODEL] : {llm_choise}"
         f"[ORDER] keywords={keywords} | before={len(matched)} | "
         f"first_changed={matched[0] is not ordered[0] if matched and ordered else False}"
     )

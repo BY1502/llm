@@ -33,6 +33,14 @@ FIELD_ALIASES: Dict[str, list[str]] = {
     "향후조치계획": ["향후조치계획","향후 조치 계획", "향후조치 계획", "향후 조치계획"],
 }
 
+FILTERABLE_FIELDS = [
+    "날씨",
+    "공사종류",
+    "인적사고종류",
+    "공종(대)",
+    "사망자수",
+    "부상자수"
+]
 
 def meta_get(md: Dict[str, Any], logical_key: str) -> str:
     for real_key in FIELD_ALIASES.get(logical_key, [logical_key]):

@@ -23,6 +23,6 @@ class RunResponse(BaseModel):
     summary: str
     mode: Optional[str] = None          # ← pipeline에서 넣는 mode
     llm_model: Optional[str] = None     # ← pipeline에서 넣는 llm_model (llm_choise 로그용)
-    json: Optional[Dict[str, Any]] = None  # ← 우리가 만든 JSON Auto-Schema 전체
+    json_data: Optional[Dict[str, Any]] = None  # ← 우리가 만든 JSON Auto-Schema 전체
 
     sources: List[Dict[str, Any]]       # 그대로 유지

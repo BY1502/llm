@@ -2,7 +2,6 @@ from rag_pipeline.config import ModelCfg
 from rag_pipeline.retrieval.hybrid import hybrid_retrieve
 from rag_pipeline.retrieval.rerankers import CrossEncoderReranker
 from rag_pipeline.indexing.sparse import build_sparse_retriever
-from rag_pipeline.llm.summarize import summarize_with_llm
 from rag_pipeline.llm.json_answer import answer_with_json_autoschema
 from rag_pipeline.core.global_index import get_global_index
 from rag_pipeline.core.workspace import WORKSPACES
@@ -116,18 +115,18 @@ def extract_query_keywords(query: str | None) -> list[str]:
 
 def prioritize_docs_by_keywords(docs: list[Document], keywords: list[str]) -> list[Document]:
     """
-    문서를 버리지 않고, 키워드가 들어있는 문서만 앞으로 정렬
-    - 매칭된 문서들 먼저
-    - 나머지 문서들 그 뒤에 그대로
+    문서를 버리지 않고, 키워드가 많이 포함된 문서일수록 리스트의 앞쪽으로 정렬합니다.
+    (단순 유/무가 아니라, 매칭된 개수(Count)를 기준으로 내림차순 정렬)
     """
     if not keywords or not docs:
         return docs
     
-    hits: list[Document] = []
-    others: list[Document] = []
-    
+    # 문서별 매칭 점수 계산
+    scored_docs = []
     for d in docs:
         md = d.metadata or {}
+        # 검색 대상 텍스트 생성 (메타데이터 + 본문)
+        # None 값 필터링 및 문자열 변환
         meta_values = [str(v) for v in md.values() if v is not None]
         text_pieces = meta_values + [
             str(md.get("source", "") or ""),
@@ -135,18 +134,18 @@ def prioritize_docs_by_keywords(docs: list[Document], keywords: list[str]) -> li
         ]
         big_text = " ".join(text_pieces)
         
-        if any(kw in big_text for kw in keywords):
-            hits.append(d)
-        else:
-            others.append(d)
-            
-    # 문서 하나도 매칭 안 되면, 순서 안 건드림 
-    if not hits:
-        return docs
+        # 🔥 [핵심 수정] 키워드가 '몇 개'나 포함되었는지 카운트 (점수화)
+        match_count = sum(1 for kw in keywords if kw in big_text)
+        
+        # (매칭 개수, 원래 순서 보존을 위한 문서 객체)
+        scored_docs.append((match_count, d))
+        
+    # 매칭 개수 기준 내림차순 정렬 (많은 게 위로)
+    # 파이썬의 sort는 stable하므로, 점수가 같으면 원래(Vector/BM25) 순위가 유지됨
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
     
-    # 키워드가 들어있는 애들을 앞으로 나머지는 그대로 뒤에
-    return hits + others
-
+    # 정렬된 문서 리스트 반환
+    return [d for count, d in scored_docs]
 def run_pipeline(req):
 
     model_cfg = ModelCfg()
@@ -215,6 +214,8 @@ def run_pipeline(req):
     used_bm25 = False
 
     mode = (req.retrieval or "hybrid").lower()
+    
+    CANDIDATE_K = max(req.final_k * 3, 10)
 
     if mode == "dense":
         matched = vs.as_retriever(search_kwargs={"k": req.k}).invoke(req.query) if vs else []
@@ -236,7 +237,8 @@ def run_pipeline(req):
                 bm25,
                 k_dense=req.k,
                 k_sparse=req.k,
-                k_final=req.final_k,
+                # k_final=req.final_k,
+                k_final=CANDIDATE_K,
                 reranker=reranker,
             )
             used_vs = True
@@ -305,7 +307,13 @@ def run_pipeline(req):
     )
 
     # 🔹 LLM에 넘길 최종 문서 리스트 (정렬 적용, 실패 시 fallback)
-    final_docs = ordered or matched
+    # final_docs = ordered or matched
+    final_docs = ordered[:req.final_k] if ordered else matched[:req.final_k]
+
+    print(
+        f"[ORDER] keywords={keywords} | candidates={len(ordered)} -> final_k={len(final_docs)} | "
+        f"first_changed={matched[0] is not ordered[0] if matched and ordered else False}"
+    )
 
     # -----------------------------------------------------
     # 7) LLM JSON Auto-Schema 응답 생성
@@ -330,7 +338,7 @@ def run_pipeline(req):
         "summary": summary_text,          # 🔹 FastAPI 응답 스키마용 (string)
         "mode": mode,
         "llm_model": llm_choise,
-        "json": json_answer,              # 🔹 새 JSON Auto-Schema 전체
+        "json_data": json_answer,              # 🔹 새 JSON Auto-Schema 전체
         "sources": [
             {
                 "source": d.metadata.get("source", ""),

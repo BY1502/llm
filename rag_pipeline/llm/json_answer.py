@@ -1,151 +1,5 @@
-# # rag_pipeline/llm/json_answer.py
-
-# from __future__ import annotations
-
-# import json
-# from dataclasses import dataclass
-# from typing import Any, Dict, List
-
-# from langchain_core.documents import Document
-# from langchain_ollama import ChatOllama
-
-# from rag_pipeline.config import ModelCfg  # 네가 쓰고 있는 위치 기준으로 맞춰줘
-
-
-# # 🔹 JSON + Auto-Schema 용 시스템 프롬프트
-# AUTO_SCHEMA_SYSTEM_PROMPT = """
-# 당신은 JSON 구조 설계와 데이터 매핑을 수행하는 어시스턴트입니다.
-
-# 규칙:
-# 1. 반드시 유효한 JSON만 출력하세요. 설명 문장, 마크다운, 주석을 절대 포함하지 마세요.
-# 2. 최상위 키는 반드시 query, schema, answer, source_chunks 네 개만 사용하세요.
-# 3. schema.fields 안의 필드 목록은 "사용자 질문"과 "컨텍스트"를 보고 당신이 스스로 설계하세요.
-# 4. answer 객체는 schema.fields 정의에 맞게만 값을 채우세요.
-# 5. source_chunks에는 실제로 사용한 근거 청크만 최대 5개까지 넣으세요.
-# 6. 자료가 없는 경우에는 "자료 없음"이라고 명시하세요.
-
-# 출력 JSON 스키마:
-# {
-#   "query": string,                     
-#   "schema": {
-#     "description": string,             
-#     "fields": [
-#       {
-#         "name": string,                
-#         "type": "string | number | boolean | array | object",
-#         "description": string
-#       }
-#     ]
-#   },
-#   "answer": object,                    
-#   "source_chunks": [
-#     {
-#       "doc_id": string,
-#       "chunk_id": string,
-#       "snippet": string
-#     }
-#   ]
-# }
-# """
-
-
-# def _build_context_block(docs: List[Document]) -> str:
-#     """LLM에 넘길 컨텍스트 문자열 생성 (기존 디버그 스타일 유지 느낌으로)."""
-#     lines: List[str] = []
-#     for idx, d in enumerate(docs):
-#         meta = d.metadata or {}
-#         doc_id = (
-#             meta.get("doc_id")
-#             or meta.get("source")
-#             or meta.get("doc")
-#             or ""
-#         )
-#         chunk_id = meta.get("chunk_id") or meta.get("id") or f"chunk_{idx}"
-
-#         header = f"[doc_id={doc_id} chunk_id={chunk_id}]"
-#         content = d.page_content.strip().replace("\n", " ")
-#         lines.append(f"{header} {content}")
-#     return "\n".join(lines)
-
-
-# def _parse_json_safely(raw: str) -> Dict[str, Any]:
-#     """
-#     Ollama가 앞뒤에 약간의 텍스트를 붙이는 경우를 대비해서
-#     JSON 블록만 잘라내서 파싱하는 유틸.
-#     """
-#     raw = raw.strip()
-
-#     # 이미 깨끗한 JSON일 가능성 우선 시도
-#     try:
-#         return json.loads(raw)
-#     except Exception:
-#         pass
-
-#     # 첫 번째 '{'부터 마지막 '}'까지 잘라서 재시도
-#     try:
-#         start = raw.index("{")
-#         end = raw.rindex("}") + 1
-#         return json.loads(raw[start:end])
-#     except Exception:
-#         raise ValueError(f"LLM JSON 파싱 실패: {raw[:200]}...")
-
-
-# def answer_with_json_autoschema(
-#     query: str,
-#     docs: List[Document],
-#     model_cfg: ModelCfg,
-#     llm_model: str | None = None,
-# ) -> Dict[str, Any]:
-#     """
-#     JSON Mode + Auto-Schema 방식으로 답변하는 LLM 호출 함수.
-#     - query: 사용자 질문
-#     - docs: RAG로 찾은 top_k Document 리스트
-#     - model_cfg: 기존에 쓰는 ModelCfg (ollama_model 사용)
-#     """
-#     context_block = _build_context_block(docs)
-
-#     user_prompt = f"""
-# 사용자 질문: "{query}"
-
-# 검색된 컨텍스트(청크들):
-# \"\"\"
-# {context_block}
-# \"\"\"
-
-# 위 정보를 참고해서 다음 규칙을 지키면서 JSON만 출력하세요.
-# """
-
-#     llm = ChatOllama(
-#         model=model_cfg.ollama_model or model_cfg.ollama_model,
-#         temperature=0.1,
-#     )
-
-#     # 🔹 Chat 형식 메시지 구성 (네 스타일에 맞게 단순하게)
-#     messages = [
-#         {"role": "system", "content": AUTO_SCHEMA_SYSTEM_PROMPT},
-#         {"role": "user", "content": user_prompt},
-#     ]
-
-#     resp = llm.invoke(messages)
-#     content = getattr(resp, "content", resp)
-
-#     data = _parse_json_safely(content)
-    
-#     if "answer" not in data and "response" in data:
-#         data["answer"] = data["response"]
-
-#     # 최소 검증
-#     for key in ("query", "schema", "answer"):
-#         if key not in data:
-#             raise ValueError(f"LLM JSON 응답에 '{key}' 키가 없습니다: {data}")
-
-#     return data
-
-# rag_pipeline/llm/json_answer.py
-
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List
 
 from langchain_core.documents import Document
@@ -165,12 +19,17 @@ AUTO_SCHEMA_SYSTEM_PROMPT = """
   파일 밖의 지식은 사용하지 마십시오.
 
 규칙:
-1. 사용자가 특정 항목(예: 구체적 사고원인, 재발방지 대책 등)을 물어보면,
-   그 항목에 해당하는 내용만 중심으로 답변하세요.
+1. 사용자가 특정 항목(예: 구체적 사고원인, 재발방지 대책 등)을 물어보면, 그 항목에 해당하는 내용만 중심으로 답변하세요.
 2. 여러 사고가 섞여 있더라도, 질문과 가장 관련도가 높은 한 건의 사고를 기준으로 답변하세요.
-3. 답변은 자연어 문장 또는 짧은 bullet 형태로 작성해도 됩니다.
-4. 컨텍스트에 없는 정보는 절대 지어내지 말고,
-   "컨텍스트에 해당 정보가 없습니다."라고 명시하세요.
+3. 컨텍스트에는 CSV의 모든 원본 정보가 포함되어 있으므로, 불필요한 정보(예: '미입력', '0', '1,000억원 미만' 등)는 무시하고, 핵심 정보에 집중하십시오.
+4. 컨텍스트에 없는 정보는 절대 지어내지 말고, "컨텍스트에 해당 정보가 없습니다."라고 명시하세요.
+5. 만약 질문이 '순서', '절차' 등을 요구한다면, 단순히 번호가 매겨진 목록을 발견했다고 해서 바로 추출하지 마십시오.
+   **반드시 그 목록의 소제목이나 각 항목의 내용이 질문의 의도(예: '해체')와 일치하는지 확인하십시오.**
+   * 주의: 문서 제목에 '설치/해체'가 같이 있더라도, **하위 목록의 내용이 '설치(자재반입, 조립 등)'라면 해체 작업의 답변으로 사용해서는 안 됩니다.**
+   * '해체'를 물었다면 내용에 '해체', '분리', '제거' 등의 단어가 포함된 목록만을 선택하여 추출하십시오.
+6. [🔥 핵심 규칙: 조건부 출력] **만약 질문이 특정 사고의 상세 내용 (예: '스타필드 안성 사고사례')을 묻는 경우**, 답변은 **주요 항목을 빠짐없이 포함한 마크다운 리스트 형식** (예: `* 사고명: ..., * 사고원인: ...`)으로 작성하여 **사실을 명확하게 구분**하십시오. **이때 포함할 항목은 컨텍스트에서 찾을 수 있는 '사고명', '사고일시', '사고경위', '구체적 사고원인', '재발방지대책' 등**을 중심으로 모델이 **자율적으로 판단**하여 포함합니다.
+7. 그 외의 일반적인 질문(예: '공사 종류는 무엇인가요?', '안전 수칙은?')에 대해서는 규칙 5의 구조를 따르지 않고, 간결한 서술형 문장 또는 일반적인 마크다운 리스트로 자유롭게 답변하세요.
+8. [🔥 종료 규칙] 질문에 대한 답변 작성이 완료되면, 컨텍스트에 남은 다른 문서(특히 질문과 관련 없는 '설치' 등의 내용)가 있더라도 **절대 추가 내용을 덧붙이지 말고 즉시 답변을 종료**하십시오.
 """
 
 
@@ -194,29 +53,6 @@ def _build_context_block(docs: List[Document]) -> str:
         content = d.page_content.strip().replace("\n", " ")
         lines.append(f"{header} {content}")
     return "\n".join(lines)
-
-
-def _parse_json_safely(raw: str) -> Dict[str, Any]:
-    """
-    (현재는 사용하지 않지만, 필요 시 재사용 가능한 JSON 파서)
-    Ollama가 앞뒤에 텍스트를 붙이는 경우를 대비해서
-    JSON 블록만 잘라내서 파싱하는 유틸.
-    """
-    raw = raw.strip()
-
-    # 이미 깨끗한 JSON일 가능성 우선 시도
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-
-    # 첫 번째 '{'부터 마지막 '}'까지 잘라서 재시도
-    try:
-        start = raw.index("{")
-        end = raw.rindex("}") + 1
-        return json.loads(raw[start:end])
-    except Exception:
-        raise ValueError(f"LLM JSON 파싱 실패: {raw[:200]}...")
 
 
 def answer_with_json_autoschema(
@@ -255,6 +91,7 @@ def answer_with_json_autoschema(
 사용자의 질문에 대해 한국어로 간결하게 답변하세요.
 질문에서 특정 항목(예: 구체적 사고원인, 재발방지 대책 등)을 요구하면,
 그 항목 위주로만 정리해서 답변하세요.
+만약 질문이 **'순서', '절차', '단계', '방법' 등**의 **복잡한 단계별 목록**을 요구한다면, 컨텍스트에 있는 **가장 상세하고 계층적인 목록**을 **요약하지 말고** 번호나 불렛을 사용하여 **원문 그대로 충실히 재구성하여** 답변하십시오.
 컨텍스트에 정보가 없으면, 정보가없다고만 출력하세요.
 """
 

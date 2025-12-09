@@ -7,11 +7,13 @@ from typing import List
 
 import pandas as pd
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# from langchain_text_splitters import RecursiveCharacterTextSplitter 텍스트 스플리터
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.language_models import BaseLanguageModel
-from langchain_community.document_loaders import TextLoader, PyPDFLoader,PyMuPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 
-from rag_pipeline.config import ChunkCfg, PipelineCfg
+from rag_pipeline.config import ChunkCfg, PipelineCfg, ModelCfg
 from rag_pipeline.data_io.csv_schema import (
     FIELD_ALIASES,
     meta_get,
@@ -19,7 +21,7 @@ from rag_pipeline.data_io.csv_schema import (
     print_csv_schema_report,
     save_csv_schema_report,
 )
-from rag_pipeline.data_io.readers import read_pdf, read_txt
+from rag_pipeline.data_io.readers import read_txt
 from rag_pipeline.utils.text import extract_kv_metadata
 from rag_pipeline.metadata.tag_extractor import extract_metadata_from_text
 
@@ -42,8 +44,6 @@ def _sanitize_metadata(meta: dict) -> dict:
         else:
             clean[k] = str(v)
     return clean
-
-
 
 def _try_read_csv(path):
     # 1) 파일 앞부분 샘플
@@ -120,67 +120,14 @@ def _try_read_csv(path):
     logger.error("CSV parsing failed for %s", path)
     return None
 
-# def csv_rows_to_documents(path: Path, pipeline_cfg: PipelineCfg) -> List[Document]:
-#     df = _try_read_csv(path)
-#     if df is None or df.empty:
-#         raise RuntimeError(f"Failed to read CSV (encoding/sep/lines): {path}")
-
-#     df.columns = [str(c).strip() for c in df.columns]
-
-#     report = make_csv_schema_report(df, path)
-#     print_csv_schema_report(report)
-#     save_csv_schema_report(
-#         report,
-#         str(pipeline_cfg.schema_report_dir) if pipeline_cfg.schema_report_dir else None,
-#     )
-
-#     # FIELD_ALIASES의 logical key 리스트를 기준으로, 실제 컬럼명은 meta_get이 알아서 매핑한다.
-#     logical_keys = list(FIELD_ALIASES.keys())
-
-#     docs: List[Document] = []
-#     for i, (_, row) in enumerate(df.iterrows()):
-#         # 1) 원본 row를 그대로 메타데이터에 넣는다 (파일에 있는 컬럼명 그대로).
-#         md = {str(k).strip(): ("" if pd.isna(v) else str(v)) for k, v in row.items()}
-
-#         # 2) 논리 키 기준으로 값 추출 (alias 포함).
-#         body_lines: list[str] = []
-#         normalized_meta: dict = {}
-#         for key in logical_keys:
-#             val = meta_get(md, key)
-#             if val and val != "정보 없음":
-#                 body_lines.append(f"{key}: {val}")
-#                 # 메타데이터에도 표준화된 키로 한 번 더 저장해 둔다.
-#                 normalized_meta[key] = val
-
-#         body = "\n".join(body_lines).strip()
-
-#         # 3) 최종 메타데이터: source + 원본 컬럼 + 표준화 키 + 고정 id
-#         meta = {
-#             "source": str(path),
-#             **md,
-#             **normalized_meta,
-#         }
-#         meta["id"] = f"{meta['source']}#p0#c{i}"
-
-#         docs.append(
-#             Document(
-#                 page_content=body or str(md),
-#                 metadata=meta,
-#             )
-#         )
-
-#     return docs
-
-# 모든 칼럼을 메타데이터로 추출
+# 노이즈 제거
 def csv_rows_to_documents(path: Path, pipeline_cfg: PipelineCfg) -> List[Document]:
     df = _try_read_csv(path)
     if df is None or df.empty:
         raise RuntimeError(f"Failed to read CSV (encoding/sep/lines): {path}")
 
-    # 헤더 공백 정리
     df.columns = [str(c).strip() for c in df.columns]
 
-    # (선택) 스키마 리포트는 그대로 유지
     report = make_csv_schema_report(df, path)
     print_csv_schema_report(report)
     save_csv_schema_report(
@@ -188,29 +135,31 @@ def csv_rows_to_documents(path: Path, pipeline_cfg: PipelineCfg) -> List[Documen
         str(pipeline_cfg.schema_report_dir) if pipeline_cfg.schema_report_dir else None,
     )
 
+    # FIELD_ALIASES의 logical key 리스트를 기준으로, 실제 컬럼명은 meta_get이 알아서 매핑한다.
+    logical_keys = list(FIELD_ALIASES.keys())
+
     docs: List[Document] = []
-
     for i, (_, row) in enumerate(df.iterrows()):
-        # 1) 이 row의 메타데이터: CSV 컬럼명을 그대로 키로 사용
-        md: dict[str, str] = {}
-        for k, v in row.items():
-            col_name = str(k).strip()
-            # NaN/빈 문자열은 제외
-            if pd.isna(v):
-                continue
-            val = str(v).strip()
-            if not val:
-                continue
-            md[col_name] = val
+        # 1) 원본 row를 그대로 메타데이터에 넣는다 (파일에 있는 컬럼명 그대로).
+        md = {str(k).strip(): ("" if pd.isna(v) else str(v)) for k, v in row.items()}
 
-        # 2) page_content = "컬럼명: 값" 줄로 쭉 이어붙이기
-        body_lines: list[str] = [f"{key}: {val}" for key, val in md.items()]
+        # 2) 논리 키 기준으로 값 추출 (alias 포함).
+        body_lines: list[str] = []
+        normalized_meta: dict = {}
+        for key in logical_keys:
+            val = meta_get(md, key)
+            if val and val != "정보 없음":
+                body_lines.append(f"{key}: {val}")
+                # 메타데이터에도 표준화된 키로 한 번 더 저장해 둔다.
+                normalized_meta[key] = val
+
         body = "\n".join(body_lines).strip()
 
-        # 3) 최종 메타데이터: source + 원본 컬럼 그대로 + id
+        # 3) 최종 메타데이터: source + 원본 컬럼 + 표준화 키 + 고정 id
         meta = {
             "source": str(path),
             **md,
+            **normalized_meta,
         }
         meta["id"] = f"{meta['source']}#p0#c{i}"
 
@@ -222,7 +171,6 @@ def csv_rows_to_documents(path: Path, pipeline_cfg: PipelineCfg) -> List[Documen
         )
 
     return docs
-
 
 def load_documents_from_path(path: Path, chunk_cfg: ChunkCfg, pipeline_cfg: PipelineCfg,
                              llm_for_tags: BaseLanguageModel | None = None) -> List[Document]:
@@ -239,7 +187,7 @@ def load_documents_from_path(path: Path, chunk_cfg: ChunkCfg, pipeline_cfg: Pipe
         return generic_file_to_documents(path, chunk_cfg,llm_for_tags=llm_for_tags)
     return []
 
-
+# 시멘틱 청킹 적용 버전
 def generic_file_to_documents(
     path: Path,
     chunk_cfg: ChunkCfg,
@@ -247,11 +195,10 @@ def generic_file_to_documents(
 ) -> List[Document]:
     print(f"[CHUNK] generic_file_to_documents start: {path}")
     """
-    TXT/PDF 등 일반 텍스트 파일을 청킹해서 LangChain Document 리스트로 변환.
-    + (옵션) llm_for_tags 가 주어지면 문서 레벨 태그/메타데이터를 추출해서 각 청크 metadata에 포함.
+    TXT/PDF 등 일반 텍스트 파일을 '시멘틱 청킹(의미 기반)'으로 변환.
     """
 
-    # 1) 원본 텍스트 읽기 (확장자 기준)
+    # 1) 원본 텍스트 읽기
     ext = path.suffix.lower()
     if ext == ".txt":
         raw = read_txt(path)
@@ -261,18 +208,17 @@ def generic_file_to_documents(
         raw = "\n".join(p.page_content for p in pages)
         print(f"[PDF] PyMuPDFLoader loaded {len(pages)} pages from {path.name}")
     else:
-        # raw = ""
-        return [] # 추가
+        return []
 
     if not raw or not raw.strip():
         return []
 
-    # 2) 기본 메타데이터 (공통)
+    # 2) 기본 메타데이터
     base_meta: dict = {
         "source": str(path),
     }
 
-    # 3) LLM으로 태그/메타데이터 추출
+    # 3) LLM 태깅 (기존 로직 유지)
     if llm_for_tags is not None:
         try:
             tag_meta = extract_metadata_from_text(
@@ -285,42 +231,69 @@ def generic_file_to_documents(
             tag_meta = {}
         else:
             base_meta.update({
-            "document_type": tag_meta.get("document_type"),
-            "project_name": tag_meta.get("project_name"),
-            "location": tag_meta.get("location"),
-            "company": tag_meta.get("company"),
-            "facility_type": tag_meta.get("facility_type"),
-            "tags": tag_meta.get("tags", []),
-            "source_filename": tag_meta.get("source_filename", path.name),
-        })
+                "document_type": tag_meta.get("document_type"),
+                "project_name": tag_meta.get("project_name"),
+                "location": tag_meta.get("location"),
+                "company": tag_meta.get("company"),
+                "facility_type": tag_meta.get("facility_type"),
+                "tags": tag_meta.get("tags", []),
+                "source_filename": tag_meta.get("source_filename", path.name),
+            })
 
-    # 4) 키:값 메타데이터 추출
+    # 4) 키:값 메타데이터 추출 (기존 로직 유지)
     kv_meta = extract_kv_metadata(raw)
     base_meta.update({f"meta:{k}": v for k, v in kv_meta.items()})
 
-    # 5) 청킹
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_cfg.size,
-        chunk_overlap=chunk_cfg.overlap,
-        separators=["\n\n", "\n", ". ", ".", " "],
+    # -------------------------------------------------------------------------
+    # 🔥 [핵심 수정] 시멘틱 청커 적용
+    # -------------------------------------------------------------------------
+    print(f"[CHUNK] 시멘틱 청킹 시작... (Embedding 연산으로 시간이 걸릴 수 있습니다)")
+    
+    # 임베딩 모델 로드 (config.py의 ModelCfg 사용)
+    model_cfg = ModelCfg()
+    embeddings = HuggingFaceEmbeddings(
+        model_name=model_cfg.embed_model,
+        encode_kwargs={"normalize_embeddings": True}
     )
-    chunks = splitter.split_text(raw)
+
+    # 시멘틱 청커 초기화
+    # breakpoint_threshold_type: "percentile"(기본값), "standard_deviation", "interquartile" 등 선택 가능
+    splitter = SemanticChunker(
+        embeddings=embeddings,
+        breakpoint_threshold_type="percentile", # 의미 변화가 큰 상위 지점을 자름
+        breakpoint_threshold_amount=90,         # 민감도 조절 (높을수록 덜 자름)
+    )
+    
+    # 텍스트 분할 실행
+    try:
+        chunks = splitter.split_text(raw)
+    except Exception as e:
+        print(f"[CHUNK] 시멘틱 청킹 실패, 기본 스플리터로 대체합니다: {e}")
+        # 실패 시 fallback (기존 방식)
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        fallback_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_cfg.size,
+            chunk_overlap=chunk_cfg.overlap,
+        )
+        chunks = fallback_splitter.split_text(raw)
 
     print(
         f"[CHUNK] file={path.name} ext={path.suffix.lower()} "
-        f"chunks={len(chunks)} size={chunk_cfg.size} overlap={chunk_cfg.overlap}"
+        f"semantic_chunks={len(chunks)}"
     )
 
-        # 6) Document 리스트 생성
+    # 6) Document 리스트 생성
     docs: List[Document] = []
     for i, ch in enumerate(chunks):
+        # 내용이 너무 짧은 청크(노이즈)는 스킵
+        if len(ch.strip()) < 10:
+            continue
+
         raw_meta = {
             **base_meta,
             "chunk_id": i,
             "id": f"{base_meta['source']}#p0#c{i}",
         }
-
-        # 🔥 Chroma가 먹을 수 있게 메타데이터 정리
         safe_meta = _sanitize_metadata(raw_meta)
 
         docs.append(
@@ -331,6 +304,4 @@ def generic_file_to_documents(
         )
 
     return docs
-
-
 

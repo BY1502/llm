@@ -9,11 +9,11 @@ from langchain_ollama import ChatOllama
 # =========================================================
 # 1. MariaDB 접속 정보 입력 (여기를 수정하세요)
 # =========================================================
-DB_USER = "cws"          # DB 아이디
-DB_PASSWORD = "dydidqhghtk"  # DB 비밀번호 (특수문자 포함돼도 OK)
-DB_HOST = "192.168.0.202"     # DB IP 주소 (로컬이면 localhost)
-DB_PORT = "3306"          # MariaDB 포트 (기본 3306)
-DB_NAME = "care"       # 접속할 데이터베이스 이름
+DB_USER =         # DB 아이디
+DB_PASSWORD =   # DB 비밀번호 (특수문자 포함돼도 OK)
+DB_HOST =      # DB IP 주소 (로컬이면 localhost)
+DB_PORT =         # MariaDB 포트 (기본 3306)
+DB_NAME =        # 접속할 데이터베이스 이름
 
 # [중요] 비밀번호에 특수문자(@ 등)가 있으면 에러가 납니다. URL 인코딩 처리
 encoded_password = urllib.parse.quote_plus(DB_PASSWORD)

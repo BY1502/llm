@@ -236,11 +236,11 @@ def run_pipeline(req):
         all_tags.extend(_ensure_tags_list(d.metadata.get("tags")))
 
     # 🔥 [주석 처리] 매칭된 데이터 출력 ( 너무 길어서 출력하지 않음 )
-    # unique_tags = sorted(set(all_tags))
-    # print(f"[MATCH] matched_docs={len(matched)} | unique_tags={unique_tags}")
+    unique_tags = sorted(set(all_tags))
+    print(f"[MATCH] matched_docs={len(matched)} | unique_tags={unique_tags}")
 
-    # if matched:
-    #     print("[DEBUG] first matched metadata:", matched[0].metadata)
+    if matched:
+        print("[DEBUG] first matched metadata:", matched[0].metadata)
 
     # -----------------------------------------------------
     # 6) 요청에서 tags 필터링

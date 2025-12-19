@@ -1,5 +1,5 @@
 import logging
-
+import asyncio
 from fastapi import APIRouter, HTTPException
 
 from rag_pipeline.api.models import RunRequest, RunResponse
